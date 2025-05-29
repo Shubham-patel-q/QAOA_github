@@ -1,0 +1,552 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>COBYLA Optimization for MaxCut (QAOA)</title>
+    <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+    <style>
+        #info-table {
+            margin-top: 20px;
+            font-family: Arial, sans-serif;
+            font-size: 14px;
+        }
+        #info-table table {
+            border-collapse: collapse;
+            width: 100%;
+            max-width: 600px;
+        }
+        #info-table th, #info-table td {
+            border: 1px solid #ddd;
+            padding: 8px;
+            text-align: left;
+        }
+        #info-table th {
+            background-color: #f2f2f2;
+        }
+        #controls {
+            margin: 10px 0;
+        }
+        button, select {
+            margin-right: 10px;
+            padding: 8px 16px;
+        }
+        #plots {
+            display: flex;
+            flex-wrap: wrap;
+        }
+        #plot, #graph-plot {
+            width: 48%;
+            min-width: 300px;
+            margin: 1%;
+        }
+        /* New styles for parameter inputs */
+        .param-input {
+            width: 60px;
+            margin: 0 5px;
+        }
+        .param-row {
+            margin: 5px 0;
+        }
+        #params-container {
+            margin-top: 15px;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            max-width: 600px;
+        }
+    </style>
+</head>
+<body>
+    <h1>COBYLA Optimization for MaxCut (QAOA)</h1>
+    <p>Visualizing COBYLA optimizing a MaxCut objective for a complete graph in a QAOA context.<br>
+       Select the number of nodes (3–6), then use "Next Step" for manual iteration, "Start" for automatic iteration (1-second delay), or "Reset" to restart.<br>
+       The left plot shows the objective function; the right plot shows the graph with the optimal cut. MaxCut value is shown per iteration.</p>
+    <div id="controls">
+        <label for="node-count">Nodes: </label>
+        <select id="node-count">
+            <option value="3">3</option>
+            <option value="4" selected>4</option>
+            <option value="5">5</option>
+            <option value="6">6</option>
+        </select>
+        <button id="step">Next Step</button>
+        <button id="start">Start</button>
+        <button id="reset">Reset</button>
+        
+        <!-- NEW: Parameter inputs section -->
+        <div id="params-container">
+            <h3>Initial Simplex Parameters:</h3>
+            <div class="param-row">
+                <label>Point 1 (γ, β):</label>
+                <input type="number" id="p1-gamma" class="param-input" value="0" step="0.1">
+                <input type="number" id="p1-beta" class="param-input" value="0" step="0.1">
+            </div>
+            <div class="param-row">
+                <label>Point 2 (γ, β):</label>
+                <input type="number" id="p2-gamma" class="param-input" value="1" step="0.1">
+                <input type="number" id="p2-beta" class="param-input" value="0" step="0.1">
+            </div>
+            <div class="param-row">
+                <label>Point 3 (γ, β):</label>
+                <input type="number" id="p3-gamma" class="param-input" value="0" step="0.1">
+                <input type="number" id="p3-beta" class="param-input" value="1" step="0.1">
+            </div>
+            <button id="update-params">Update Parameters</button>
+        </div>
+    </div>
+    <div id="plots">
+        <div id="plot"></div>
+        <div id="graph-plot"></div>
+    </div>
+    <p id="info">Iteration: 0 | Objective Value: N/A | MaxCut Value: N/A | Operation: Initial</p>
+    <div id="info-table"></div>
+    <script>
+        // Nelder-Mead Optimizer Implementation (Maximization)
+        class NelderMead {
+            constructor(func, initialSimplex) {
+                this.func = func;
+                this.initialSimplex = initialSimplex.map(point => [...point]);
+                this.reset();
+            }
+
+            reset() {
+                this.simplex = this.initialSimplex.map(point => ({ x: point, value: this.func(point[0], point[1]) }));
+                this.iteration = 0;
+                this.lastOperation = 'Initial';
+                this.alpha = 1;
+                this.gamma = 2;
+                this.rho = 0.5;
+                this.sigma = 0.5;
+            }
+
+            centroid() {
+                const n = this.simplex.length - 1;
+                const centroid = [0, 0];
+                for (let i = 0; i < n; i++) {
+                    centroid[0] += this.simplex[i].x[0] / n;
+                    centroid[1] += this.simplex[i].x[1] / n;
+                }
+                return centroid;
+            }
+
+            step() {
+                this.iteration++;
+                this.simplex.sort((a, b) => b.value - a.value);
+                const best = this.simplex[0];
+                const worst = this.simplex[this.simplex.length - 1];
+                const secondWorst = this.simplex[this.simplex.length - 2];
+                const centroid = this.centroid();
+
+                const reflected = [
+                    centroid[0] + this.alpha * (centroid[0] - worst.x[0]),
+                    centroid[1] + this.alpha * (centroid[1] - worst.x[1])
+                ];
+                const reflectedValue = this.func(reflected[0], reflected[1]);
+
+                if (reflectedValue > best.value) {
+                    const expanded = [
+                        centroid[0] + this.gamma * (reflected[0] - centroid[0]),
+                        centroid[1] + this.gamma * (reflected[1] - centroid[1])
+                    ];
+                    const expandedValue = this.func(expanded[0], expanded[1]);
+                    if (expandedValue > reflectedValue) {
+                        this.simplex[this.simplex.length - 1] = { x: expanded, value: expandedValue };
+                        this.lastOperation = 'Expansion';
+                    } else {
+                        this.simplex[this.simplex.length - 1] = { x: reflected, value: reflectedValue };
+                        this.lastOperation = 'Reflection';
+                    }
+                } else if (reflectedValue > secondWorst.value) {
+                    this.simplex[this.simplex.length - 1] = { x: reflected, value: reflectedValue };
+                    this.lastOperation = 'Reflection';
+                } else {
+                    const contracted = [
+                        centroid[0] + this.rho * (worst.x[0] - centroid[0]),
+                        centroid[1] + this.rho * (worst.x[1] - centroid[1])
+                    ];
+                    const contractedValue = this.func(contracted[0], contracted[1]);
+                    if (contractedValue > worst.value) {
+                        this.simplex[this.simplex.length - 1] = { x: contracted, value: contractedValue };
+                        this.lastOperation = 'Contraction';
+                    } else {
+                        for (let i = 1; i < this.simplex.length; i++) {
+                            this.simplex[i].x = [
+                                best.x[0] + this.sigma * (this.simplex[i].x[0] - best.x[0]),
+                                best.x[1] + this.sigma * (this.simplex[i].x[1] - best.x[1])
+                            ];
+                            this.simplex[i].value = this.func(this.simplex[i].x[0], this.simplex[i].x[1]);
+                        }
+                        this.lastOperation = 'Shrink';
+                    }
+                }
+                return {
+                    operation: this.lastOperation,
+                    simplex: this.simplex.map(p => ({ x: p.x, value: p.value })),
+                    centroid: centroid
+                };
+            }
+
+            getSimplex() {
+                return this.simplex.map(p => p.x);
+            }
+
+            getBestValue() {
+                return Math.max(...this.simplex.map(p => p.value));
+            }
+
+            getBestPoint() {
+                return this.simplex.reduce((a, b) => a.value > b.value ? a : b).x;
+            }
+        }
+
+        // Graph and MaxCut utilities
+        function generateCompleteGraph(n) {
+            const edges = [];
+            for (let i = 0; i < n; i++) {
+                for (let j = i + 1; j < n; j++) {
+                    edges.push([i, j]);
+                }
+            }
+            return edges;
+        }
+
+        function computePartition(n, gamma, beta) {
+            const partition = new Array(n).fill(0);
+            for (let i = 1; i < n; i++) {
+                partition[i] = Math.sin(gamma + beta * i) > 0 ? 1 : 0;
+            }
+            return partition;
+        }
+
+        function computeMaxCutValue(n, edges, partition) {
+            let cutValue = 0;
+            for (const [u, v] of edges) {
+                if (partition[u] !== partition[v]) {
+                    cutValue++;
+                }
+            }
+            return cutValue;
+        }
+
+        // MaxCut objective function (QAOA approximation)
+        function maxCutObjective(gamma, beta, n) {
+            const numEdges = (n * (n - 1)) / 2;
+            const maxCutEstimate = Math.floor(n * n / 4);
+            return maxCutEstimate * Math.sin(gamma) * Math.sin(beta) + maxCutEstimate / 2;
+        }
+
+        // Generate surface data
+        function generateSurface(func, xRange, yRange, step = 0.1, n) {
+            const x = [];
+            const y = [];
+            const z = [];
+            for (let i = xRange[0]; i <= xRange[1]; i += step) {
+                x.push(i);
+            }
+            for (let j = yRange[0]; j <= yRange[1]; j += step) {
+                y.push(j);
+            }
+            for (let i = 0; i < x.length; i++) {
+                const row = [];
+                for (let j = 0; j < y.length; j++) {
+                    const value = func(x[i], y[j], n);
+                    row.push(isFinite(value) ? value : 0);
+                }
+                z.push(row);
+            }
+            return { x, y, z };
+        }
+
+        // Plot graph
+        function plotGraph(n, edges, partition) {
+            const graphDiv = document.getElementById('graph-plot');
+            if (!graphDiv) {
+                console.error('Graph plot div not found!');
+                return;
+            }
+
+            const nodePositions = [];
+            for (let i = 0; i < n; i++) {
+                const theta = (2 * Math.PI * i) / n;
+                nodePositions.push([Math.cos(theta), Math.sin(theta)]);
+            }
+
+            const nodeX = nodePositions.map(p => p[0]);
+            const nodeY = nodePositions.map(p => p[1]);
+            const nodeColors = partition.map(p => p === 0 ? 'red' : 'blue');
+
+            const edgeX = [];
+            const edgeY = [];
+            const edgeColors = [];
+            for (const [u, v] of edges) {
+                edgeX.push(nodePositions[u][0], nodePositions[v][0], null);
+                edgeY.push(nodePositions[u][1], nodePositions[v][1], null);
+                edgeColors.push(partition[u] !== partition[v] ? 'rgba(0,255,0,0.5)' : 'rgba(0,0,0,0.2)');
+            }
+
+            const data = [
+                {
+                    x: edgeX,
+                    y: edgeY,
+                    mode: 'lines',
+                    line: { color: edgeColors, width: 2 },
+                    name: 'Edges'
+                },
+                {
+                    x: nodeX,
+                    y: nodeY,
+                    mode: 'markers+text',
+                    marker: { size: 20, color: nodeColors },
+                    text: nodeX.map((_, i) => i.toString()),
+                    textposition: 'middle center',
+                    name: 'Nodes'
+                }
+            ];
+
+            const layout = {
+                title: `MaxCut Graph (n=${n})`,
+                xaxis: { showgrid: false, zeroline: false, visible: false },
+                yaxis: { showgrid: false, zeroline: false, visible: false },
+                showlegend: false,
+                margin: { l: 0, r: 0, b: 0, t: 40 }
+            };
+
+            try {
+                Plotly.newPlot('graph-plot', data, layout);
+            } catch (error) {
+                console.error('Graph plot error:', error);
+            }
+        }
+
+        // Initialize simplex - now will be set from UI
+        let initialSimplex = [
+            [0, 0],
+            [1, 0],
+            [0, 1]
+        ];
+
+        // State management
+        let optimizer = null;
+        let animationInterval = null;
+        let currentNodes = 4;
+        let edges = generateCompleteGraph(currentNodes);
+
+        // NEW: Function to update initial simplex from UI
+        function updateInitialSimplexFromUI() {
+            initialSimplex = [
+                [
+                    parseFloat(document.getElementById('p1-gamma').value),
+                    parseFloat(document.getElementById('p1-beta').value)
+                ],
+                [
+                    parseFloat(document.getElementById('p2-gamma').value),
+                    parseFloat(document.getElementById('p2-beta').value)
+                ],
+                [
+                    parseFloat(document.getElementById('p3-gamma').value),
+                    parseFloat(document.getElementById('p3-beta').value)
+                ]
+            ];
+        }
+
+        // Plot current state
+        function plotCurrentState(stepInfo) {
+            const plotDiv = document.getElementById('plot');
+            if (!plotDiv) {
+                console.error('Plot div not found!');
+                return;
+            }
+
+            const simplex = optimizer.getSimplex();
+            const xPoints = simplex.map(p => p[0]).filter(x => isFinite(x));
+            const yPoints = simplex.map(p => p[1]).filter(y => isFinite(y));
+            const zPoints = simplex.map(p => maxCutObjective(p[0], p[1], currentNodes)).filter(z => isFinite(z));
+
+            if (xPoints.length !== 3 || yPoints.length !== 3 || zPoints.length !== 3) {
+                console.error('Invalid simplex data:', { xPoints, yPoints, zPoints });
+                return;
+            }
+
+            const surfaceData = generateSurface(maxCutObjective, [-Math.PI, Math.PI], [-Math.PI, Math.PI], 0.1, currentNodes);
+
+            const data = [
+                {
+                    z: surfaceData.z,
+                    x: surfaceData.x,
+                    y: surfaceData.y,
+                    type: 'surface',
+                    name: 'MaxCut Objective',
+                    colorscale: 'Viridis'
+                },
+                {
+                    x: xPoints,
+                    y: yPoints,
+                    z: zPoints,
+                    mode: 'markers+lines',
+                    type: 'scatter3d',
+                    marker: { size: 6, color: 'red' },
+                    line: { color: 'red', width: 2 },
+                    name: 'Simplex'
+                }
+            ];
+
+            const layout = {
+                title: `MaxCut Optimization (n=${currentNodes})`,
+                scene: {
+                    xaxis: { title: 'γ (gamma)' },
+                    yaxis: { title: 'β (beta)' },
+                    zaxis: { title: 'f(γ, β)' }
+                },
+                margin: { l: 0, r: 0, b: 0, t: 40 }
+            };
+
+            try {
+                Plotly.newPlot('plot', data, layout);
+                const bestPoint = optimizer.getBestPoint();
+                const partition = computePartition(currentNodes, bestPoint[0], bestPoint[1]);
+                const maxCutValue = computeMaxCutValue(currentNodes, edges, partition);
+                document.getElementById('info').innerText = 
+                    `Iteration: ${optimizer.iteration} | Objective Value: ${optimizer.getBestValue().toFixed(4)} | MaxCut Value: ${maxCutValue} | Operation: ${stepInfo.operation}`;
+                updateInfoTable(stepInfo);
+                plotGraph(currentNodes, edges, partition);
+            } catch (error) {
+                console.error('Plotly error:', error);
+            }
+        }
+
+        // Update info table
+        function updateInfoTable(stepInfo) {
+            const tableDiv = document.getElementById('info-table');
+            if (!tableDiv) {
+                console.error('Info table div not found!');
+                return;
+            }
+
+            let tableHtml = `
+                <table>
+                    <tr>
+                        <th>Point</th>
+                        <th>Coordinates (γ, β)</th>
+                        <th>f(γ, β)</th>
+                    </tr>`;
+            stepInfo.simplex.forEach((point, index) => {
+                tableHtml += `
+                    <tr>
+                        <td>Point ${index + 1}</td>
+                        <td>(${point.x[0].toFixed(4)}, ${point.x[1].toFixed(4)})</td>
+                        <td>${point.value.toFixed(4)}</td>
+                    </tr>`;
+            });
+            tableHtml += `
+                    <tr>
+                        <td>Centroid</td>
+                        <td>(${stepInfo.centroid[0].toFixed(4)}, ${stepInfo.centroid[1].toFixed(4)})</td>
+                        <td>-</td>
+                    </tr>
+                </table>`;
+            tableDiv.innerHTML = tableHtml;
+        }
+
+        // Initialize application
+        function initialize(n) {
+            currentNodes = n;
+            edges = generateCompleteGraph(n);
+            optimizer = new NelderMead((gamma, beta) => maxCutObjective(gamma, beta, n), initialSimplex);
+            if (animationInterval) {
+                clearInterval(animationInterval);
+                animationInterval = null;
+            }
+            plotCurrentState({ operation: 'Initial', simplex: optimizer.simplex, centroid: optimizer.centroid() });
+            document.getElementById('step').disabled = false;
+            document.getElementById('start').disabled = false;
+        }
+
+        // Initialize after DOM is loaded
+        window.onload = function() {
+            const plotDiv = document.getElementById('plot');
+            const graphDiv = document.getElementById('graph-plot');
+            if (!plotDiv || !graphDiv) {
+                console.error('Plot or graph div not found on load!');
+                return;
+            }
+            initialize(currentNodes);
+            
+            // NEW: Set up parameter update button
+            document.getElementById('update-params').addEventListener('click', function() {
+                updateInitialSimplexFromUI();
+                initialize(currentNodes);
+            });
+        };
+
+        // Button and dropdown references
+        const stepButton = document.getElementById('step');
+        const startButton = document.getElementById('start');
+        const resetButton = document.getElementById('reset');
+        const nodeSelect = document.getElementById('node-count');
+
+        // Step button event listener
+        if (stepButton) {
+            stepButton.addEventListener('click', function() {
+                if (!animationInterval) {
+                    const stepInfo = optimizer.step();
+                    plotCurrentState(stepInfo);
+                }
+            });
+        } else {
+            console.error('Step button not found!');
+        }
+
+        // Start button event listener
+        if (startButton) {
+            startButton.addEventListener('click', function() {
+                if (animationInterval) return;
+                stepButton.disabled = true;
+                startButton.disabled = true;
+                animationInterval = setInterval(() => {
+                    const maxCutEstimate = Math.floor(currentNodes * currentNodes / 4);
+                    const maxValue = maxCutEstimate + maxCutEstimate / 2;
+                    const bestValue = optimizer.getBestValue();
+                    if (bestValue > maxValue - 0.0001 || optimizer.iteration >= 100) {
+                        clearInterval(animationInterval);
+                        animationInterval = null;
+                        stepButton.disabled = false;
+                        startButton.disabled = false;
+                        return;
+                    }
+                    const stepInfo = optimizer.step();
+                    plotCurrentState(stepInfo);
+                }, 1000);
+            });
+        } else {
+            console.error('Start button not found!');
+        }
+
+        // Reset button event listener
+        if (resetButton) {
+            resetButton.addEventListener('click', function() {
+                if (animationInterval) {
+                    clearInterval(animationInterval);
+                    animationInterval = null;
+                }
+                optimizer.reset();
+                stepButton.disabled = false;
+                startButton.disabled = false;
+                plotCurrentState({ operation: 'Initial', simplex: optimizer.simplex, centroid: optimizer.centroid() });
+            });
+        } else {
+            console.error('Reset button not found!');
+        }
+
+        // Node count dropdown event listener
+        if (nodeSelect) {
+            nodeSelect.addEventListener('change', function() {
+                const n = parseInt(nodeSelect.value);
+                initialize(n);
+            });
+        } else {
+            console.error('Node count select not found!');
+        }
+    </script>
+</body>
+</html>
